@@ -1,0 +1,3 @@
+<launch>
+	<node name="auto_control_logic" pkg="yeti_snowplow" type="auto_control_logic" output="screen" />
+</launch>
