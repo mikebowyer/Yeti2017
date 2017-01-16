@@ -57,6 +57,8 @@ add_message_files(
   robot_position.msg
   target.msg
   turn.msg
+  landmark.msg
+  landmark_list.msg
 )
 
 ## Generate services in the 'srv' folder

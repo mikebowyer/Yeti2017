@@ -2,6 +2,8 @@
 #include <sensor_msgs/PointCloud.h>
 #include <sensor_msgs/PointCloud.h>
 #include "yeti_snowplow/robot_position.h"
+#include "yeti_snowplow/landmark.h"
+#include "yeti_snowplow/landmark_list.h"
 #include <geometry_msgs/Point.h>
 #include <math.h>
 #include <fstream>
@@ -15,35 +17,34 @@
 
 using namespace std;
 
+
 ros::Publisher pub;//ROS publisher
 
-sensor_msgs::PointCloud landmarkLocationsTxt;//holds landmark locations from text file
-yeti_snowplow::robot_position prev_robot_location;//holds previous robot location
+yeti_snowplow::landmark_list landmarkLocationsTxt;//holds landmark locations from text file
+yeti_snowplow::robot_position yeti_location;//holds previous robot location
 
 //find the landmark locations, with respect to where Yeti was. 
-sensor_msgs::PointCloud scanLandmarks(sensor_msgs::PointCloud landmarkLocsTXT, const sensor_msgs::PointCloud::ConstPtr& scan_pt_cloud /*sensor_msgs::PointCloud* scan_pt_cloud*/, yeti_snowplow::robot_position prev_robot_location)
+yeti_snowplow::landmark_list scanLandmarks(yeti_snowplow::landmark_list landmarkLocsTXT, const sensor_msgs::PointCloud::ConstPtr& scan_pt_cloud, yeti_snowplow::robot_position prev_robot_location)
 {
 	//ROS_INFO_STREAM("Cloud size: " << scan_pt_cloud->points.size());
 	//ROS_INFO_STREAM("Number of Landmarks: " << landmarkLocsTXT.points.size());
+	yeti_snowplow::landmark_list foundLandmarkLocs;//vector for each found landmark location
 
-	sensor_msgs::PointCloud foundLandmarkLocations;//vector for each found landmark location
-
-	for(int i=0; i < landmarkLocsTXT.points.size();i++)
+	for(int i=0; i < landmarkLocsTXT.landmarks.size();i++)
 	{
 		double smallestSeparation = .75;  ////landmark_tolerance;
 		//double smallestSeparation = 1.5;  ////landmark_tolerance;
-
-		geometry_msgs::Point matchedLandmark;
 		
 		//Variables to store when looping through scan point cloud
 		double Xsum = 0;//Summation to take average of all points from scan correlate to expected landmark position
 		double ysum = 0;//Summation to take average of all points from scan correlate to expected landmark position
+		double headingsum = 0;
 		int found_points = 0;//used for diving the above summation to find average X and Y points of a landmark
 		int k = 0;
 		
 		//variables for determining and saving landmark
 		int LM_POINTS_THRESH = 2;//number of points a landmark must be in a scan to be considered a landmarkLocationsTxt
-		ROS_INFO_STREAM("Scanning for Landmark " << i );
+		//ROS_INFO_STREAM("Scanning for Landmark " << i );
 
 		for( int j=0; j < scan_pt_cloud->points.size(); j++)
 		{
@@ -66,15 +67,16 @@ sensor_msgs::PointCloud scanLandmarks(sensor_msgs::PointCloud landmarkLocsTXT, c
 
 
 			//find difference from where point is, to where landmark is expected to be
-			double xSeparation = landmarkLocsTXT.points[i].x - point_x_field;	
-			double ySeparation = landmarkLocsTXT.points[i].y - point_y_field;
+			double xSeparation = landmarkLocsTXT.landmarks[i].x - point_x_field;	
+			double ySeparation = landmarkLocsTXT.landmarks[i].y - point_y_field;
 			double currentSeparation = sqrt(pow(xSeparation, 2) + pow(ySeparation, 2));// find distance the current point is from the current landmark
 			//ROS_INFO_STREAM("Current Seperation: "<< currentSeparation);
 
 			if (currentSeparation < smallestSeparation)//If the point is close to the landmarks position
 			{
 				Xsum +=point_x_field;// add each X point to find average of X points
-				ysum +=point_y_field;//add each y point to find average of X points
+				ysum +=point_y_field;//add each y point to find average of y points
+				headingsum += point_angle_field;//add each heading to find average heading
 				found_points++;
 			}
 		}//end scan pointcloud loop
@@ -86,22 +88,28 @@ sensor_msgs::PointCloud scanLandmarks(sensor_msgs::PointCloud landmarkLocsTXT, c
 			//Find average X, Y locaiton and average distance from expected Landmark Location
 			double XAverage = Xsum/ (double)found_points;//taking average X value of found points
 			double YAverage = ysum/ (double)found_points;//taking average y value of found points
+			double headingAverage=headingsum/found_points;
 			double distanceAverage = sqrt(XAverage*XAverage + YAverage*YAverage);
 			
 			//make sure the average distance from the object is not to big. IE if there is a big thing where a landmark is supposed to be
 			if (distanceAverage < 15)  ////MAX_LANDMARKS_DISTANCE)
 			{
-				geometry_msgs::Point32 foundLandmark;
-				foundLandmark.x=landmarkLocsTXT.points[i].x;
-				foundLandmark.y=landmarkLocsTXT.points[i].y;
-				foundLandmarkLocations.points.push_back(foundLandmark);
-				//ROS_INFO_STREAM("Found landmark at " << XAverage << "\tY: " << YAverage);
+				yeti_snowplow::landmark found_Landmark;
+				found_Landmark.x = landmarkLocsTXT.landmarks[i].x;
+				found_Landmark.y = landmarkLocsTXT.landmarks[i].y;
+				found_Landmark.distance = 0.4 * distanceAverage;
+                found_Landmark.distance += 0.6 * sqrt(pow(prev_robot_location.x - found_Landmark.x,2) + pow(prev_robot_location.y - found_Landmark.y,2));
+				found_Landmark.heading = headingAverage;
+				foundLandmarkLocs.landmarks.push_back(found_Landmark);
+				//ROS_INFO_STREAM("Found landmark at " << found_Landmark.x << "\tY: " << found_Landmark.y 
+				//				<< "\nAngle from 0rads: "<< found_Landmark.heading << "\tDist to landmark: " 
+				//				<<found_Landmark.distance);
 				continue;
 			}
 		}
 	}//end landmark loop
-	ROS_INFO_STREAM("Number of Found Landmarks: " << foundLandmarkLocations.points.size());
-	return foundLandmarkLocations;
+	ROS_INFO_STREAM("Number of Found Landmarks: " << foundLandmarkLocs.landmarks.size());
+	return foundLandmarkLocs;
 }
 
 sensor_msgs::PointCloud scanObjects(const sensor_msgs::PointCloud::ConstPtr& scan_pt_cloud, yeti_snowplow::robot_position prev_robot_location)
@@ -189,7 +197,7 @@ std::vector<std::string> split(const std::string &s, char delim)
 }
 
 //gater landmarks from text file. Text file is in ROS PARAM.
-sensor_msgs::PointCloud importLandMarks(string filename)
+yeti_snowplow::landmark_list importLandMarks(string filename)
 {
 	//setup necassry string parsing and file parameters
 	string str;
@@ -206,6 +214,9 @@ sensor_msgs::PointCloud importLandMarks(string filename)
 	file.close();
 
 	sensor_msgs::PointCloud importedLandmarkLocations;//allocate space for landmark points
+	yeti_snowplow::landmark_list importedLandmarkLocs;
+
+	
 	int landmarkNum=0;// initialize iterator
 	file.open(filename.c_str());//reopen file
 
@@ -217,24 +228,22 @@ sensor_msgs::PointCloud importLandMarks(string filename)
 		
 		if(lineFields.size() == 2) //ignore if too short or starts with "// "
 		{ 
-			geometry_msgs::Point32 landmarkPoint;
-			landmarkPoint.x=atof(lineFields[0].c_str());
-			landmarkPoint.y=atof(lineFields[1].c_str());
-			// importedLandmarkLocations.points[landmarkNum].x = atof(lineFields[0].c_str());
-			// importedLandmarkLocations.points[landmarkNum].y = atof(lineFields[1].c_str());
-			ROS_INFO("Landmark %d: \tX: %f\tY:%f",landmarkNum, landmarkPoint.x, landmarkPoint.y);
+			yeti_snowplow::landmark found_landmarkPoint;
+			found_landmarkPoint.x=atof(lineFields[0].c_str());
+			found_landmarkPoint.y=atof(lineFields[1].c_str());
+			ROS_INFO("Landmark %d: \tX: %f\tY:%f",landmarkNum, found_landmarkPoint.x, found_landmarkPoint.y);
 			landmarkNum++;
 
-			importedLandmarkLocations.points.push_back(landmarkPoint);
+			importedLandmarkLocs.landmarks.push_back(found_landmarkPoint);
 		}
 	}
 	file.close();
 
-	return importedLandmarkLocations;
+	return importedLandmarkLocs;
 }
 
 //find where robot is in field with newly found landmark locaitons
-yeti_snowplow::robot_position determineRobotLocaiton(sensor_msgs::PointCloud FLML/*Found landmark locatinos*/, yeti_snowplow::robot_position prev_robot_location)
+yeti_snowplow::robot_position determineRobotLocaiton(yeti_snowplow::landmark_list FLML/*Found landmark locatinos*/, yeti_snowplow::robot_position prev_robot_location)
 {
 	int JMAX = 15;//maximum amount of attempts to try to find minimum error in robot location
 	double mu = 0.1; // (Only read) base learning rate of least error square learning algorithm
@@ -263,10 +272,11 @@ yeti_snowplow::robot_position determineRobotLocaiton(sensor_msgs::PointCloud FLM
     double derr = 0.0; // derivative of cost function. Helps determine local minimum
     double lasterrsqrd = 99999.0;//variable to store previous error squared to determine if new error squared is better than last
     double lambda = 10.0; // Levenburg markequardt variable which changes learning rate of learning algorithm. Increases when error increases, and decreases as error decreases.
-	
+	double min_der_tolerance = .001;//tolerance of dereivative of error to determine if local minima is reached.
 	yeti_snowplow::robot_position thisRobotPos = prev_robot_location;//creating variable for robot position, initializing to the previous locaiton
-
-	/*Initialize Hessian Matrix To Zeroes*/
+	
+	ROS_INFO_STREAM("starting theta in localization: " << thisRobotPos.heading);
+	//Initialize Hessian Matrix To Zeroes//
 	for (int i = 0; i < 3; i++)
 	{
 		for (int j = 0; j < 3; j++)
@@ -276,7 +286,7 @@ yeti_snowplow::robot_position determineRobotLocaiton(sensor_msgs::PointCloud FLM
 			H_inv[i][j] =0;
 		}
 	}
-
+	
 	//Attempt to minimize!
 	for (int j = 0; j < JMAX; j++)
     {
@@ -291,57 +301,143 @@ yeti_snowplow::robot_position determineRobotLocaiton(sensor_msgs::PointCloud FLM
 		if (updateh)
         {
 			//reset hessian matrix to zeros
-			for (int i = 0
-			; i < 3; i++)
+			for (int i = 0; i < 3; i++)
 			{
 				for (int k = 0; k < 3; k++)
 				{
 					H[i][k] = 0.0;
 				}
 			}
-			H[0][0] = H[1][1] = H[2][2] = mu * FLML.points.size();  // Formula 21
-			x_err = mu * FLML.points.size() * (prev_robot_location.x - thisRobotPos.x);
-			y_err = mu * FLML.points.size() * (prev_robot_location.y - thisRobotPos.y);
-			t_err = mu * FLML.points.size() * (prev_robot_location.heading - thisRobotPos.heading);
 
-			for (int i = 0; i < FLML.points.size();i++)
+			//calculate the error variables
+			H[0][0] = H[1][1] = H[2][2] = mu * FLML.landmarks.size();  // Formula 21
+			x_err = mu * FLML.landmarks.size() * (prev_robot_location.x - thisRobotPos.x);
+			y_err = mu * FLML.landmarks.size() * (prev_robot_location.y - thisRobotPos.y);
+			t_err = mu * FLML.landmarks.size() * (prev_robot_location.heading - thisRobotPos.heading);
+
+
+			for (int i = 0; i < FLML.landmarks.size();i++)
 			{
-				//distance_to_landmark
-				
-				ex = FLML.points[i].x - thisRobotPos.x; 
-				ey = FLML.points[i].y - thisRobotPos.y; 
+				//finding error(difference) between where the landmark is, and where we expect it to be
+				ex = FLML.landmarks[i].x - thisRobotPos.x - FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading); 
+				ey = FLML.landmarks[i].y - thisRobotPos.y - FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading);
+
+
+				//updating all of the error variables
+				derr += abs(ex) + abs( ey);
+				errsqrd += pow(ex, 2) + pow(ey, 2);
+				x_err += ex;
+                y_err += ey;
+				t_err += ex * (FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading)) - ey * (FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading));
+				//ROS_INFO_STREAM("t_err = " <<t_err);
+
+
+				//updating hessian matrix 
+				H[0][0] += 1;  // Formula 9.2, Formula 21
+				H[0][1] += 0;  // Formula 10.2, Formula 21
+				H[0][2] += (FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading));  // Formula 11.2, Formula 22
+				H[1][0] += 0;  // Formula 12.2, Formula 21
+				H[1][1] += 1;  // Formula 13.2,, Formula 21
+				H[1][2] += -(FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading));  // Formula 14.2, Formula 23
+				H[2][0] += (FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading));  // Formula 15.2, Formula 22
+				H[2][1] += -(FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading));  // Formula 16.2, Formula 23
+				H[2][2] += pow(FLML.landmarks[i].distance, 2);  // Formula 17.2, Formula 24
+
 			}
 
 
+			//create H for Levenburg marquadt method
+			for (int i = 0; i < 3; i++)
+			{
+				for (int k = 0; k < 3; k++)
+				{
+					H_lm[i][k] = H[i][k];
 
-		}
-	}
+					if (i == k)
+					{
+						H_lm[i][k] += lambda * 1.0;
+					}
+				}
+			}
+
+			//calculating determinant from LM hessian matrix
+			det = H_lm[0][0] * (H_lm[2][2] * H_lm[1][1] - H_lm[2][1] * H_lm[1][2]) -
+                    H_lm[1][0] * (H_lm[2][2] * H_lm[0][1] - H_lm[2][1] * H_lm[0][2]) +
+                    H_lm[2][0] * (H_lm[1][2] * H_lm[0][1] - H_lm[1][1] * H_lm[0][2]);
+
+			// Find inverse of H_lm
+			H_inv[0][0] = (H_lm[2][2] * H_lm[1][1] - H_lm[2][1] * H_lm[1][2]) / det;
+			H_inv[0][1] = -(H_lm[2][2] * H_lm[0][1] - H_lm[2][1] * H_lm[0][2]) / det;
+			H_inv[0][2] = (H_lm[1][2] * H_lm[0][1] - H_lm[1][1] * H_lm[0][2]) / det;
+			H_inv[1][0] = -(H_lm[2][2] * H_lm[1][0] - H_lm[2][0] * H_lm[1][2]) / det;
+			H_inv[1][1] = (H_lm[2][2] * H_lm[0][0] - H_lm[2][0] * H_lm[0][2]) / det;
+			H_inv[1][2] = -(H_lm[1][2] * H_lm[0][0] - H_lm[1][0] * H_lm[0][2]) / det;
+			H_inv[2][0] = (H_lm[2][1] * H_lm[1][0] - H_lm[2][0] * H_lm[1][1]) / det;
+			H_inv[2][1] = -(H_lm[2][1] * H_lm[0][0] - H_lm[2][0] * H_lm[0][1]) / det;
+			H_inv[2][2] = (H_lm[1][1] * H_lm[0][0] - H_lm[1][0] * H_lm[0][1]) / det;
+
+			//updating deltas by using Hessian Inverse times Gradiant*/
+			dx = (H_inv[0][0] * x_err) + (H_inv[0][1] * y_err) + (H_inv[0][2] * t_err);  // Formula 25 (After plus)
+			dy = (H_inv[1][0] * x_err) + (H_inv[1][1] * y_err) + (H_inv[1][2] * t_err);  // Formula 25 (After plus)
+			dt = (H_inv[2][0] * x_err) + (H_inv[2][1] * y_err) + (H_inv[2][2] * t_err);  // Formula 25 (After plus)
+			
+			//check if the error is not getting sginificantly smaller
+			if (abs(derr) < min_der_tolerance)
+			{
+				j = JMAX;  // if the error is at a minimum them use this value instead of finding a smaller one
+			}
+			ROS_INFO_STREAM("errorsqrd = " <<errsqrd );
+			if (errsqrd < lasterrsqrd)//if error squared is better than last iteration
+			{
+				//ROS_INFO_STREAM("dt = " <<dt );
+				updateh = true;// calculate a new position
+				lambda /= 10;//make learnirng rate smalles
+				lasterrsqrd = errsqrd;
+				thisRobotPos.x += dx;  // Formula 25
+				thisRobotPos.y += dy;  // Formula 25
+				thisRobotPos.heading += dt;  // Formula 25
+				ROS_INFO_STREAM("updated X is = " << thisRobotPos.x );
+				ROS_INFO_STREAM("updated y is = " << thisRobotPos.y );
+				ROS_INFO_STREAM("updated heading is = " << thisRobotPos.heading );
+			}
+			else
+			{
+				updateh = false;
+				lambda *= 10;
+			}
+		}// update h
+	}//end minimization attempts
+
+	return thisRobotPos;
 }
+
+
 //finds landmarks, finds robot locations from landmark location, then publishes robot location
-void localizeCallBack (const sensor_msgs::PointCloud::ConstPtr& cloud_in)
+void localizeCallBack (const sensor_msgs::PointCloud::ConstPtr& laser_scan_cloud_in)
 {
 		
 		int i = 0;
-		//ROS_INFO_STREAM("Cloud size: " << cloud_in->points.size());
-		//scanObjects(cloud_in, prev_robot_location);
-
+		ROS_INFO_STREAM("Previous Robot Location:\nX: "<<yeti_location.x 
+						<<"\tY: "<< yeti_location.y<< "\tHeading: "<<yeti_location.heading);
 		//find_where landmarks are
-		sensor_msgs::PointCloud foundLandmarkLocations;
-		foundLandmarkLocations = scanLandmarks(landmarkLocationsTxt, cloud_in, prev_robot_location);
+		yeti_snowplow::landmark_list foundLandmarkLocations;
+		foundLandmarkLocations = scanLandmarks(landmarkLocationsTxt, laser_scan_cloud_in, yeti_location);
 
+		
 		//find where robot is
-		yeti_snowplow::robot_position current_robot_position;
-		current_robot_position = determineRobotLocaiton(foundLandmarkLocations, prev_robot_location);
+		yeti_location = determineRobotLocaiton(foundLandmarkLocations, yeti_location);
+		ROS_INFO_STREAM("Current Robot Location:\nX: "<<yeti_location.x 
+						<<"\tY: "<< yeti_location.y<< "\tHeading: "<<yeti_location.heading);
 }
 
 
 main (int argc, char** argv)
 {
 	//creating starting location for Yeti
-	prev_robot_location.x = 0;
-	prev_robot_location.y = 0;
-	prev_robot_location.distance = 0;
-	prev_robot_location.heading = PI/2;
+	yeti_location.x = 0;
+	yeti_location.y = 0;
+	yeti_location.distance = 0;
+	yeti_location.heading = PI/2;
 
 	ros::init (argc, argv, "localization");
 	ros::NodeHandle nh;
