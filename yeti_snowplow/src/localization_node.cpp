@@ -32,7 +32,7 @@ yeti_snowplow::landmark_list scanLandmarks(yeti_snowplow::landmark_list landmark
 
 	for(int i=0; i < landmarkLocsTXT.landmarks.size();i++)
 	{
-		double smallestSeparation = .75;  ////landmark_tolerance;
+		double smallestSeparation = 1.5;  ////landmark_tolerance;
 		//double smallestSeparation = 1.5;  ////landmark_tolerance;
 		
 		//Variables to store when looping through scan point cloud
@@ -43,7 +43,7 @@ yeti_snowplow::landmark_list scanLandmarks(yeti_snowplow::landmark_list landmark
 		int k = 0;
 		
 		//variables for determining and saving landmark
-		int LM_POINTS_THRESH = 2;//number of points a landmark must be in a scan to be considered a landmarkLocationsTxt
+		int LM_POINTS_THRESH = 1;//number of points a landmark must be in a scan to be considered a landmarkLocationsTxt
 		//ROS_INFO_STREAM("Scanning for Landmark " << i );
 
 		for( int j=0; j < scan_pt_cloud->points.size(); j++)
@@ -61,6 +61,8 @@ yeti_snowplow::landmark_list scanLandmarks(yeti_snowplow::landmark_list landmark
 			double point_magnitude= sqrt(pow(scan_pt_cloud->points[j].x,2) + pow(scan_pt_cloud->points[j].y,2));//need to find distance of point from LiDAR
 			
 			double point_angle_field =  prev_robot_location.heading + atan2 (scan_pt_cloud->points[j].y, scan_pt_cloud->points[j].x) - PI/2; //find the angle of the point from the X plane in the field, rather than the LiDAR	
+			//Pi/2 is added because Lidar Scan is not centered at 0 degrees. It is centered at 90.__arr
+
 			double point_x_field = prev_robot_location.x + cos(point_angle_field)*point_magnitude;//find the points X value in the field, not with respect to the LiDAR.
 			double point_y_field = prev_robot_location.y + sin(point_angle_field)*point_magnitude;//find the points Y value in the field, not with respect to the LiDAR.
 			//ROS_INFO_STREAM("Point in field - X:" << point_x_field << "\t Y: "<< point_y_field<< "\tAngle: " << point_angle_field);
@@ -91,7 +93,7 @@ yeti_snowplow::landmark_list scanLandmarks(yeti_snowplow::landmark_list landmark
 			double headingAverage=headingsum/found_points;
 			double distanceAverage = sqrt(XAverage*XAverage + YAverage*YAverage);
 			
-			//make sure the average distance from the object is not to big. IE if there is a big thing where a landmark is supposed to be
+			//if landmark is further than 15 then throw it out
 			if (distanceAverage < 15)  ////MAX_LANDMARKS_DISTANCE)
 			{
 				yeti_snowplow::landmark found_Landmark;
@@ -99,12 +101,12 @@ yeti_snowplow::landmark_list scanLandmarks(yeti_snowplow::landmark_list landmark
 				found_Landmark.y = landmarkLocsTXT.landmarks[i].y;
 				found_Landmark.distance = 0.4 * distanceAverage;
                 found_Landmark.distance += 0.6 * sqrt(pow(prev_robot_location.x - found_Landmark.x,2) + pow(prev_robot_location.y - found_Landmark.y,2));
-				found_Landmark.heading = headingAverage;
+				found_Landmark.heading_from_yeti = headingAverage;//saving angle to landmark from yeti point in field angle, not from yeti heading
+				found_Landmark.heading_lidar = headingAverage - prev_robot_location.heading + PI/2;//saving angel difference between yeti heading and angle landmark 
 				foundLandmarkLocs.landmarks.push_back(found_Landmark);
 				//ROS_INFO_STREAM("Found landmark at " << found_Landmark.x << "\tY: " << found_Landmark.y 
-				//				<< "\nAngle from 0rads: "<< found_Landmark.heading << "\tDist to landmark: " 
-				//				<<found_Landmark.distance);
-				continue;
+					//			<< "\nAngle from 0rads: "<< found_Landmark.heading << "\tDist to landmark: " 
+					//			<<found_Landmark.distance);
 			}
 		}
 	}//end landmark loop
@@ -114,7 +116,7 @@ yeti_snowplow::landmark_list scanLandmarks(yeti_snowplow::landmark_list landmark
 
 sensor_msgs::PointCloud scanObjects(const sensor_msgs::PointCloud::ConstPtr& scan_pt_cloud, yeti_snowplow::robot_position prev_robot_location)
 {
-	double seperation_thresh=0.1;//max distance between points for them to be considered the same object
+	/*double seperation_thresh=0.1;//max distance between points for them to be considered the same object
 	double nonseperation_thresh=0.4572;//maximum distance 
 	int objPointThresh = 3; // minimum number of points needed to be considered an object
 	int objStartIndex=0;
@@ -175,7 +177,7 @@ sensor_msgs::PointCloud scanObjects(const sensor_msgs::PointCloud::ConstPtr& sca
 		}
 	}
 	ROS_INFO_STREAM("Objects found: " << object_counter);
-	return object_locations;
+	return object_locations;*/
 }
 
 //Used to parse strings. because C++ doesn't have built in string splitting http://stackoverflow.com/a/236803
@@ -245,14 +247,8 @@ yeti_snowplow::landmark_list importLandMarks(string filename)
 //find where robot is in field with newly found landmark locaitons
 yeti_snowplow::robot_position determineRobotLocaiton(yeti_snowplow::landmark_list FLML/*Found landmark locatinos*/, yeti_snowplow::robot_position prev_robot_location)
 {
-	int JMAX = 15;//maximum amount of attempts to try to find minimum error in robot location
+	int JMAX = 50;//maximum amount of attempts to try to find minimum error in robot location
 	double mu = 0.1; // (Only read) base learning rate of least error square learning algorithm
-	double maxx = 0.25;
-	double minx = 0.0001;
-	double maxy = 0.25;
-	double miny = 0.0001;
-	double maxt = 5.0 * (PI / 180.0);
-	double mint = 0.1 * (PI / 180.0);
 
 	bool updateh = false;//flag to update the hessain matrix or not
 	double H[3][3]; // Hessian of 2nd Derivatives
@@ -275,7 +271,7 @@ yeti_snowplow::robot_position determineRobotLocaiton(yeti_snowplow::landmark_lis
 	double min_der_tolerance = .001;//tolerance of dereivative of error to determine if local minima is reached.
 	yeti_snowplow::robot_position thisRobotPos = prev_robot_location;//creating variable for robot position, initializing to the previous locaiton
 	
-	ROS_INFO_STREAM("starting theta in localization: " << thisRobotPos.heading);
+	//ROS_INFO_STREAM("starting theta in localization: " << thisRobotPos.heading);
 	//Initialize Hessian Matrix To Zeroes//
 	for (int i = 0; i < 3; i++)
 	{
@@ -314,37 +310,45 @@ yeti_snowplow::robot_position determineRobotLocaiton(yeti_snowplow::landmark_lis
 			x_err = mu * FLML.landmarks.size() * (prev_robot_location.x - thisRobotPos.x);
 			y_err = mu * FLML.landmarks.size() * (prev_robot_location.y - thisRobotPos.y);
 			t_err = mu * FLML.landmarks.size() * (prev_robot_location.heading - thisRobotPos.heading);
-
-
+			//ROS_INFO_STREAM("Xerr: "<<x_err<<"\tYerr: "<<y_err<<"\tTerr: "<<t_err );
+			
 			for (int i = 0; i < FLML.landmarks.size();i++)
 			{
 				//finding error(difference) between where the landmark is, and where we expect it to be
-				ex = FLML.landmarks[i].x - thisRobotPos.x - FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading); 
-				ey = FLML.landmarks[i].y - thisRobotPos.y - FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading);
+				ex = FLML.landmarks[i].x - thisRobotPos.x - FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading_lidar - PI/2); 
+				ey = FLML.landmarks[i].y - thisRobotPos.y - FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading_lidar - PI/2);
 
+				//ex = FLML.landmarks[i].x - thisRobotPos.x - FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading); 
+				//ey = FLML.landmarks[i].y - thisRobotPos.y - FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading);
+				//ROS_INFO_STREAM("LM.X - robot.x - LM.dist*sin(robot.heading + landmark.heading)");
+				//ROS_INFO_STREAM("X: " <<FLML.landmarks[i].x<< " - " <<thisRobotPos.x<< " - "<< FLML.landmarks[i].distance<< " * cos("  << thisRobotPos.heading << " + " << FLML.landmarks[i].heading_lidar << " - 1.57");
+				//ROS_INFO_STREAM("cos = " << cos(thisRobotPos.heading + FLML.landmarks[i].heading_lidar - PI/2));
 
+				//ROS_INFO_STREAM("Y: "<< FLML.landmarks[i].y<< " - " <<thisRobotPos.y<< " - "<< FLML.landmarks[i].distance<< " * sin(" << thisRobotPos.heading << " + " << FLML.landmarks[i].heading_lidar << " - 1.57");
+				//ROS_INFO_STREAM("sin = " << sin(thisRobotPos.heading + FLML.landmarks[i].heading_lidar - PI/2));
+				
 				//updating all of the error variables
 				derr += abs(ex) + abs( ey);
 				errsqrd += pow(ex, 2) + pow(ey, 2);
 				x_err += ex;
                 y_err += ey;
-				t_err += ex * (FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading)) - ey * (FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading));
-				//ROS_INFO_STREAM("t_err = " <<t_err);
-
+				t_err += ex * (FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading_lidar -PI/2)) - ey * (FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading_lidar -PI));
+				//ROS_INFO_STREAM("ex = "<< ex << "\tey = " << ey << "\terrsqrd" << errsqrd);
+				//ROS_INFO_STREAM("Xerr: "<<x_err<<"\tYerr: "<<y_err<<"\tTerr: "<<t_err );
 
 				//updating hessian matrix 
 				H[0][0] += 1;  // Formula 9.2, Formula 21
 				H[0][1] += 0;  // Formula 10.2, Formula 21
-				H[0][2] += (FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading));  // Formula 11.2, Formula 22
+				H[0][2] += (FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading_lidar -PI/2));  // Formula 11.2, Formula 22
 				H[1][0] += 0;  // Formula 12.2, Formula 21
 				H[1][1] += 1;  // Formula 13.2,, Formula 21
-				H[1][2] += -(FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading));  // Formula 14.2, Formula 23
-				H[2][0] += (FLML.landmarks[i].distance * cos(thisRobotPos.heading + FLML.landmarks[i].heading));  // Formula 15.2, Formula 22
-				H[2][1] += -(FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading));  // Formula 16.2, Formula 23
+				H[1][2] += -(FLML.landmarks[i].distance * sin(thisRobotPos.heading + FLML.landmarks[i].heading_lidar -PI/2));  // Formula 14.2, Formula 23
+				H[2][0] += (FLML.landmarks[i].distance * cos( thisRobotPos.heading + FLML.landmarks[i].heading_lidar -PI/2));  // Formula 15.2, Formula 22
+				H[2][1] += -(FLML.landmarks[i].distance * sin( thisRobotPos.heading + FLML.landmarks[i].heading_lidar -PI/2));  // Formula 16.2, Formula 23
 				H[2][2] += pow(FLML.landmarks[i].distance, 2);  // Formula 17.2, Formula 24
 
 			}
-
+			//ROS_INFO_STREAM("Xerr: "<<x_err<<"\tYerr: "<<y_err<<"\tTerr: "<<t_err );
 
 			//create H for Levenburg marquadt method
 			for (int i = 0; i < 3; i++)
@@ -386,7 +390,7 @@ yeti_snowplow::robot_position determineRobotLocaiton(yeti_snowplow::landmark_lis
 			{
 				j = JMAX;  // if the error is at a minimum them use this value instead of finding a smaller one
 			}
-			ROS_INFO_STREAM("errorsqrd = " <<errsqrd );
+			//ROS_INFO_STREAM("errorsqrd = " <<errsqrd );
 			if (errsqrd < lasterrsqrd)//if error squared is better than last iteration
 			{
 				//ROS_INFO_STREAM("dt = " <<dt );
@@ -396,9 +400,9 @@ yeti_snowplow::robot_position determineRobotLocaiton(yeti_snowplow::landmark_lis
 				thisRobotPos.x += dx;  // Formula 25
 				thisRobotPos.y += dy;  // Formula 25
 				thisRobotPos.heading += dt;  // Formula 25
-				ROS_INFO_STREAM("updated X is = " << thisRobotPos.x );
-				ROS_INFO_STREAM("updated y is = " << thisRobotPos.y );
-				ROS_INFO_STREAM("updated heading is = " << thisRobotPos.heading );
+				//ROS_INFO_STREAM("updated X is = " << thisRobotPos.x );
+				//ROS_INFO_STREAM("updated y is = " << thisRobotPos.y );
+				//ROS_INFO_STREAM("updated heading is = " << thisRobotPos.heading );
 			}
 			else
 			{
